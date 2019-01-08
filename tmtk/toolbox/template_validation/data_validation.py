@@ -1,66 +1,62 @@
 import logging
 
+from .validation import Validator
+
 logger = logging.getLogger(' Clinical data')
 
 
-class DataValidator:
+class DataValidator(Validator):
 
-    def __init__(self, data_df, tree_df, data_source):
+    def __init__(self, df, tree_df, data_source):
         """Creates object DataValidator that runs validation tests on clinical data and gives user-friendly
         error messages.
 
-        :param self.data_df: clinical data in pandas data frame
         :param self.tree_df: tree structure in pandas data frame
         :param self.data_source: name of clinical data sheet or file
-        :param self.n_comment_lines: stores index of first line in data sheet that is not a comment
-        :param self.is_valid: boolean tracking if data passes validation steps
         :param self.tests_to_run: list containing function calls for data validation tests
         """
-        self.data_df = data_df
+        Validator.__init__(self, df)
         self.tree_df = tree_df
         self.data_source = data_source
-        self.n_comment_lines = 0
-        self.is_valid = True
-        self.tests_to_run = [self.after_comments(),
-                             self.check_encoding(),
-                             self.mandatory_col(),
-                             self.unique_col_names(),
-                             self.col_name_in_tree_sheet()
-                             ]
+        self.tests_to_run = (test for test in
+                             [self.after_comments,
+                              self.no_hashtag_or_backslash,
+                              self.check_encoding,
+                              self.mandatory_col,
+                              self.unique_col_names,
+                              self.col_name_in_tree_sheet
+                              ])
 
-    def after_comments(self):
-        """Determines where initial text with comments (instructions for data owner) ends, saves data_df without
-        these comments to continue checking and assigns column names.
+        self.validate_sheet()
+
+    def validate_sheet(self):
+        """ Iterates over tests_to_run while no issues are encountered that would interfere with following
+        validation steps
         """
-        while str(self.data_df.iloc[self.n_comment_lines, 0]).startswith('#'):
-            self.n_comment_lines += 1
-
-        header = self.data_df.iloc[self.n_comment_lines]
-        self.data_df = self.data_df[self.n_comment_lines + 1:]
-        self.data_df = self.data_df.rename(columns=header)
+        while self.can_continue:
+            next_test = next(self.tests_to_run, None)
+            if next_test:
+                next_test()
+            else:
+                return
 
     def check_encoding(self):
         """Iterate through data_df and check whether data can be encoded in UTF-8 and for # and \ within data.
         When data cannot be encoded or one of these characters is detected set self.is_valid = False and give error
         message with their location column name and row number.
         """
-        forbidden_chars = ('#', '\\')
 
-        for col_name, series in self.data_df.iteritems():
+        for col_name, series in self.df.iteritems():
             for idx, value in series.iteritems():
                 if not is_utf8(value):
                     logger.error(" Value in '{}' at column '{}', row: {} cannot be UTF-8 "
                                  "encoded.".format(self.data_source, col_name, idx + 1))
-                if any((c in forbidden_chars) for c in value):
-                    self.is_valid = False
-                    logger.error(" Detected '#' or '\\' in '{}' at column: '{}', row: "
-                                 "{}.".format(self.data_source, col_name, idx + 1))
 
     def mandatory_col(self):
         """Set self.is_valid = False if a subject identifier column called 'SUBJ_ID' is
         not present in the clinical data and give an error message if it is not.
         """
-        if 'SUBJ_ID' not in self.data_df.columns:
+        if 'SUBJ_ID' not in self.df.columns:
             self.is_valid = False
             logger.error(" Mandatory column containing subject identifiers (SUBJ_ID) not detected "
                          "in clinical data '{}'.".format(self.data_source))
@@ -69,7 +65,7 @@ class DataValidator:
         """Set self.is_valid = False if a double column name is found and give an
         error message specifying the duplicate column name(s).
         """
-        columns = self.data_df.columns
+        columns = self.df.columns
         duplicate_columns = set(columns[columns.duplicated()])
 
         if duplicate_columns:
@@ -84,7 +80,7 @@ class DataValidator:
         # All column names present in the tree sheet for the current data source
         tree_columns = self.tree_df[self.tree_df['Sheet name/File name'] == self.data_source]['Column name'].tolist()
 
-        missing_columns = [col for col in self.data_df.columns if col != 'SUBJ_ID' and col not in tree_columns]
+        missing_columns = [col for col in self.df.columns if col != 'SUBJ_ID' and col not in tree_columns]
 
         if missing_columns:
             logger.warning(" The following column(s) in '" + self.data_source +
